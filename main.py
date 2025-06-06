@@ -8,6 +8,7 @@ from pptx import Presentation
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 import traceback
+import logging
 
 app = FastAPI()
 
@@ -19,6 +20,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 OUTPUT_DIR = "slides"
 ORIGINAL_DIR = "original_slides"
@@ -32,10 +37,14 @@ def draw_slide_content(slide, width, height, output_path):
     font = ImageFont.load_default()
 
     for shape in slide.shapes:
-        if shape.shape_type == 13:  # Picture
+        if shape.shape_type == 13:  # Picture (check for image type)
             image = shape.image
-            image_bytes = image.blob
-            pil_img = Image.open(BytesIO(image_bytes))
+            try:
+                image_bytes = image.blob
+                pil_img = Image.open(BytesIO(image_bytes))
+            except IOError as e:
+                logger.warning(f"Error opening image in shape: {str(e)}. Skipping this image.")
+                continue  # Skip problematic image
 
             left = shape.left // 9525
             top = shape.top // 9525
@@ -116,7 +125,8 @@ async def convert_ppt(file: UploadFile = File(...)):
         return {"slideCount": len(prs.slides), "imageUrls": slide_urls}
 
     except Exception as e:
-        # Return a detailed error message for debugging
+        # Log the error in detail
+        logger.error(f"Error in convert_ppt: {str(e)}")
         traceback_str = traceback.format_exc()
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}\n\n{traceback_str}")
 
@@ -141,7 +151,8 @@ async def add_comment(slide_number: int, comment: str = Form(...)):
         return {"message": "Comment added", "updatedImageUrl": f"/slides/slide_{slide_number}.png"}
 
     except Exception as e:
-        # Return a detailed error message for debugging
+        # Log the error in detail
+        logger.error(f"Error in add_comment: {str(e)}")
         traceback_str = traceback.format_exc()
         raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}\n\n{traceback_str}")
 
