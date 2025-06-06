@@ -13,7 +13,7 @@ app = FastAPI()
 # CORS config
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://pptreview.netlify.app"],
+    allow_origins=["*"],  # Allow all origins for simplicity; adjust in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
