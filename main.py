@@ -39,6 +39,12 @@ def draw_slide_content(slide, width, height, output_path):
     for shape in slide.shapes:
         if shape.shape_type == 13:  # Picture (check for image type)
             image = shape.image
+
+            # Skip WMF images (WMF format has shape_type 13 but may trigger errors)
+            if image.ext == "wmf":
+                logger.warning(f"Skipping WMF image in shape. This format is not supported.")
+                continue
+
             try:
                 image_bytes = image.blob
                 pil_img = Image.open(BytesIO(image_bytes))
