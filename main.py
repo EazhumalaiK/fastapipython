@@ -7,13 +7,14 @@ import shutil
 from pptx import Presentation
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
+import traceback
 
 app = FastAPI()
 
-# CORS config
+# CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allow all origins for simplicity; adjust in production
+    allow_origins=["https://pptreview.netlify.app"],  # Allow only the Netlify origin
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -22,7 +23,7 @@ app.add_middleware(
 OUTPUT_DIR = "slides"
 ORIGINAL_DIR = "original_slides"
 
-# Store comments per slide in memory (replace with DB in prod)
+# Store comments per slide in memory (replace with DB in production)
 comments_store = {}
 
 def draw_slide_content(slide, width, height, output_path):
@@ -65,7 +66,7 @@ def draw_slide_content(slide, width, height, output_path):
 
 def overlay_comments(slide_image_path, comments):
     img = Image.open(slide_image_path).convert("RGBA")
-    overlay = Image.new("RGBA", img.size, (255,255,255,0))
+    overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
     draw = ImageDraw.Draw(overlay)
     font = ImageFont.load_default()
 
@@ -80,57 +81,69 @@ def overlay_comments(slide_image_path, comments):
 
 @app.post("/convert-ppt")
 async def convert_ppt(file: UploadFile = File(...)):
-    if not file.filename.lower().endswith(".pptx"):
-        return JSONResponse(content={"error": "Only .pptx files are supported."}, status_code=400)
+    try:
+        if not file.filename.lower().endswith(".pptx"):
+            return JSONResponse(content={"error": "Only .pptx files are supported."}, status_code=400)
 
-    # Save uploaded file temporarily
-    file_path = f"temp_{file.filename}"
-    with open(file_path, "wb") as f:
-        f.write(await file.read())
+        # Save uploaded file temporarily
+        file_path = f"temp_{file.filename}"
+        with open(file_path, "wb") as f:
+            f.write(await file.read())
 
-    # Clear previous output dirs
-    for d in [OUTPUT_DIR, ORIGINAL_DIR]:
-        if os.path.exists(d):
-            shutil.rmtree(d)
-        os.makedirs(d)
+        # Clear previous output dirs
+        for d in [OUTPUT_DIR, ORIGINAL_DIR]:
+            if os.path.exists(d):
+                shutil.rmtree(d)
+            os.makedirs(d)
 
-    prs = Presentation(file_path)
-    slide_width = prs.slide_width // 9525
-    slide_height = prs.slide_height // 9525
+        prs = Presentation(file_path)
+        slide_width = prs.slide_width // 9525
+        slide_height = prs.slide_height // 9525
 
-    for idx, slide in enumerate(prs.slides, start=1):
-        orig_path = os.path.join(ORIGINAL_DIR, f"slide_{idx}.png")
-        draw_slide_content(slide, slide_width, slide_height, orig_path)
+        for idx, slide in enumerate(prs.slides, start=1):
+            orig_path = os.path.join(ORIGINAL_DIR, f"slide_{idx}.png")
+            draw_slide_content(slide, slide_width, slide_height, orig_path)
 
-        # Initially, copy original image to output dir (no comments)
-        shutil.copy(orig_path, os.path.join(OUTPUT_DIR, f"slide_{idx}.png"))
+            # Initially, copy original image to output dir (no comments)
+            shutil.copy(orig_path, os.path.join(OUTPUT_DIR, f"slide_{idx}.png"))
 
-    os.remove(file_path)
+        os.remove(file_path)
 
-    # Clear comments store
-    comments_store.clear()
+        # Clear comments store
+        comments_store.clear()
 
-    slide_urls = [f"/slides/slide_{i+1}.png" for i in range(len(prs.slides))]
-    return {"slideCount": len(prs.slides), "imageUrls": slide_urls}
+        slide_urls = [f"/slides/slide_{i+1}.png" for i in range(len(prs.slides))]
+        return {"slideCount": len(prs.slides), "imageUrls": slide_urls}
+
+    except Exception as e:
+        # Return a detailed error message for debugging
+        traceback_str = traceback.format_exc()
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}\n\n{traceback_str}")
 
 
 @app.post("/slides/{slide_number}/comment")
 async def add_comment(slide_number: int, comment: str = Form(...)):
-    orig_image_path = os.path.join(ORIGINAL_DIR, f"slide_{slide_number}.png")
-    if not os.path.exists(orig_image_path):
-        raise HTTPException(status_code=404, detail="Slide not found")
+    try:
+        orig_image_path = os.path.join(ORIGINAL_DIR, f"slide_{slide_number}.png")
+        if not os.path.exists(orig_image_path):
+            raise HTTPException(status_code=404, detail="Slide not found")
 
-    # Add comment to store
-    comments_store.setdefault(slide_number, []).append(comment)
+        # Add comment to store
+        comments_store.setdefault(slide_number, []).append(comment)
 
-    # Overlay all comments on original image
-    updated_img = overlay_comments(orig_image_path, comments_store[slide_number])
+        # Overlay all comments on original image
+        updated_img = overlay_comments(orig_image_path, comments_store[slide_number])
 
-    # Save updated image in OUTPUT_DIR
-    updated_path = os.path.join(OUTPUT_DIR, f"slide_{slide_number}.png")
-    updated_img.save(updated_path)
+        # Save updated image in OUTPUT_DIR
+        updated_path = os.path.join(OUTPUT_DIR, f"slide_{slide_number}.png")
+        updated_img.save(updated_path)
 
-    return {"message": "Comment added", "updatedImageUrl": f"/slides/slide_{slide_number}.png"}
+        return {"message": "Comment added", "updatedImageUrl": f"/slides/slide_{slide_number}.png"}
+
+    except Exception as e:
+        # Return a detailed error message for debugging
+        traceback_str = traceback.format_exc()
+        raise HTTPException(status_code=500, detail=f"Internal Server Error: {str(e)}\n\n{traceback_str}")
 
 
 @app.get("/slides/{slide_number}/comments")
@@ -138,4 +151,5 @@ async def get_comments(slide_number: int):
     return {"comments": comments_store.get(slide_number, [])}
 
 
+# Serve images from the OUTPUT_DIR folder
 app.mount("/slides", StaticFiles(directory=OUTPUT_DIR), name="slides")
